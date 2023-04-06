@@ -1,0 +1,32 @@
+---
+title: "notes"
+author: "Daniel J. Naumenko"
+date: "2023-04-06"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+I created this project separate from the tuanan_oxidative_stress_inflammmation_cortisol project because I want to separate out the modelling of the biomarkers against themselves from their relations with diet, particularly restriction. They may end up in the same publication, but I want to explore each and work through them separately.
+
+I will keep some notes in this markdown file, so that I can keep some findings from other empirical studies, as well as some of my own thoughts, written down. 
+
+A pre-proof review of McAuley 2022 provides a lot of good information on DR/CR in humans and NHPs, but I am hesitant to rely on his thoughts and explanations given the proof status of the paper and my own...gut feeling. He includes a section on examining evolutionary strategies to DR in the wild, which can definitely give some good written ideas on why wild orangutans are a great organism to test this in. Below are some references and info from that paper:
+
+1) Spadaro et al. 2022: a modest (14%) CR does was beneficial in humans over 2 years, while a 30% reduction in grey mouse lemurs (Pifferi et al. 2018) led to lifespan extension but accelerated grey matter loss. At least in humans, smaller degrees of reduction seem beneficial.
+
+* This can provide a reason for why wild studies, especially in an ape, are essential. We should see a greater, and more 'natural', range and variation in dietary intake. This should allow us to see what sorts of CR/DR are beneficial, which are not, and if any are neutral. Granted, i won't be able to look at true percentage reductions, because I'm not really sure how to do that in a way that is comparable/a replication of lab studies. Perhaps finding some individual-baseline for orangutans with a lot of nutritional data, and then looking at their urinary biomarkers. This would be a smaller chunk of the study, but might provide some useful information that others can expand on as more data is collected at Tuanan or elsewhere, regardless of the findings.
+
+2) Kirkwood and Shanley 2005, Shanley and Kirkwood 2000: according to the resource reallocation hypothesis, organisms redirect energy from reproduction to somatic maintenance, postponing reproduction. 
+
+3) Moatt et al. 2016: meta-analysis of DR in different animals found on average DR resulted in significant reductions in reproduction.
+
+4) Bruce et al. 2013: in fruit fliges, high protein low carb diets correlate with increased reproduction and shorter lifespan
+
+5) Lee 2015: low protein high carb diets correlate with increased lifespan and diminished repoduction
+
+6) Speakman 2020 - clean cupboards hypothesis suggets when animals encounter CR they face an energy budgeting challenge. They overcome this by firstly using fat reserves and deriving metabolic energy by removing "cell junk". (autophagy upregulation and senescent cell removal). The goal is to achieve an immediate energy balance. 
+
+* see Garcia-Flores et al. 2021 for a test of the CCH against the resource reallocation hypothesis, including a range of metabolic analytes

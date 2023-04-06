@@ -1,0 +1,878 @@
+---
+title: "Report 1"
+author: "Daniel J. Naumenko"
+date: "8 February 2022"
+output:
+  html_document: default
+  word_document: default
+  pdf_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+	echo = FALSE,
+	message = FALSE,
+	warning = FALSE
+)
+```
+
+
+
+
+
+```{r load libraries and functions and read in data}
+
+# libraries
+library(tidyverse)
+library(knitr)
+library(kableExtra)
+library(gridExtra)
+library(corrplot)
+library(mgcv)
+library(fitdistrplus)
+
+
+
+# functions
+
+outlier_high <- function(x) {
+  x_mean <- mean(x, na.rm = TRUE)
+  x_sd <- sd(x, na.rm = TRUE)
+  x_mean + (3 * x_sd)
+}
+
+outlier_low <- function(x) {
+  x_mean <- mean(x, na.rm = TRUE)
+  x_sd <- sd(x, na.rm = TRUE)
+  x_mean - (3 * x_sd)
+}
+
+
+getmode <- function(v) {
+   uniqv <- unique(v)
+   uniqv[which.max(tabulate(match(v, uniqv)))]
+}
+
+####################
+### read in data ###
+####################
+
+# authorship data
+
+authorship <- read_csv("./credit_taxonomy.csv",
+                       col_names = TRUE,
+                       na = c("N/A"))
+
+
+# data from Thompson Gonzalez et al. 2020
+
+thompson_table5 <- read_csv("./table_s5_thompson.csv")
+
+thompson_table6 <- read_csv("./table_s6_thompson.csv")
+
+
+
+# nutritional data
+
+nutrition <- read_csv("./nutrition_by_follow_RSAB_29oct2021.csv")
+
+
+# biomarker data
+
+biomarkers <- read_csv("./biomarker_data.csv",
+                       na = c("NaN", "RANGE", "range", "N/A", "No Number", "", "Camera crew day - no focal"))
+
+# life history data
+
+life_history <- read_csv("./maria_lifehistory.csv")
+
+urine_nutrition <- biomarkers %>% 
+  # rename variables from MS Access format
+  mutate(sample_number = `Sample Number`,
+         follow_number = `Follow Number`,
+         ohdg = `8OHdG_Result`,
+         ohdg_cv = `tblAnalysis_8-OHdG.CV`,
+         ohdg_status = `tblAnalysis_8-OHdG.Status`,
+         tac = TAC_Result,
+         tac_cv = tblAnalysis_TAC.CV,
+         tac_status = tblAnalysis_TAC.Status,
+         neopterin = Neopterin_Result,
+         neopterin_cv = tblAnalysis_Neopterin.CV,
+         neopterin_status = tblAnalysis_Neopterin.Status,
+         cortisol = Cortisol_Result,
+         cortisol_cv = tblAnalysis_Cortisol.CV,
+         cortisol_status = tblAnalysis_Cortisol.Status,
+         specific_gravity = `CAMP/LAB_specgravitymeter`) %>% 
+  select(-c(`Sample Number`, `Follow Number`)) %>% # remove ancillary variables
+  filter(Site != "Nyaru menteng") %>%  # remove Nyaru Mentang Samples 
+  filter(!sample_number %in% c("N/A1", "N/A2", "VTU053", "N/A3", "617.5", "NM 383",
+                               "fr1.1", "fr3.1", "fr4.1", "fr6.5", "fr7.22", "fr9.4", "fr8.10", "fr11.5")) %>% 
+  # correct urine samples for specific gravity
+  mutate(ohdg_sg = (ohdg * ((1.024 - 1)/(specific_gravity - 1))),
+         tac_sg = (tac * ((1.024 - 1)/(specific_gravity - 1))),
+         neopterin_sg = (neopterin * ((1.024 - 1)/(specific_gravity - 1))),
+         cortisol_sg = (cortisol * ((1.024 - 1)/(specific_gravity - 1)))) %>% 
+  # simplify age sex classes
+  mutate(age_class = ifelse(Age_Class == "adult flanged male", "FM",
+                            ifelse(Age_Class == "adult female with dependent", "AFwD",
+                                   ifelse(Age_Class == "dependent immature non-clinging infant (4yrs-weaned)", "DINC",
+                                          ifelse(Age_Class == "independent immature (older juvs)", "II",
+                                                 ifelse(Age_Class == "adult female no dependent", "AFnD",
+                                                        ifelse(Age_Class == "adult unflanged male", "UFM",
+                                                               ifelse(Age_Class == "semi-independent immature (juveniles)", "SII",
+                                                                      ifelse(Age_Class == "dependent immature - clinging infant (0-4yrs)", "DIC", NA)))))))),
+         age_class_simp = ifelse(age_class %in% c("FM", "UFM"), "Adult Male",
+                                 ifelse(age_class %in% c("AFwD", "AFnD"), "Adult Female",
+                                        ifelse(age_class %in% c("DINC", "II", "SII", "DIC"), "Inf-Juv", NA)))) %>% 
+  mutate(date = as.Date(Date_Collected, format = "%d-%b-%y")) %>% 
+  select(-c(`8OHdG_Result`:tblAnalysis_Cortisol.CV, Age_Class, `CAMP/LAB_specgravitymeter`, Date_Collected)) %>% 
+  # join in nutrition data
+  left_join(., nutrition %>% select(-c(date, year, month, day)), by = c("follow_number")) %>% 
+  #join in maria data
+  left_join(., life_history %>% select(-c(follow_number, Date_Collected:Orangutan_ID, age_class)), by = c("sample_number"))
+
+
+
+# remove urine exclusions
+# note I am not removing "outliers"
+ohdg_keep <- urine_nutrition %>% 
+  filter(ohdg_status == "ok" & Cold_Thermos == TRUE & First_Urine_Day == TRUE & ohdg_cv < 15) %>% 
+  mutate(ohdg_keep = ohdg_sg) %>% 
+  select(sample_number, ohdg_keep)
+
+
+tac_keep <- urine_nutrition %>% 
+  filter(tac_status == "ok" & Cold_Thermos == TRUE & First_Urine_Day == TRUE & tac_cv < 15) %>% 
+  mutate(tac_keep = tac_sg) %>% 
+  select(sample_number, tac_keep)
+
+neop_keep <- urine_nutrition %>% 
+  filter(neopterin_status == "ok" & Cold_Thermos == TRUE & First_Urine_Day == TRUE & neopterin_cv < 15) %>% 
+  mutate(neop_keep = neopterin_sg) %>% 
+  select(sample_number, neop_keep)
+
+cort_keep <- urine_nutrition %>% 
+  filter(cortisol_status == "ok" & Cold_Thermos == TRUE & First_Urine_Day == TRUE & cortisol_cv < 15) %>% 
+  mutate(cort_keep = cortisol_sg) %>% 
+  select(sample_number, cort_keep)
+
+
+
+# join back into dataframe
+urine_nutrition_master <- urine_nutrition %>% 
+  left_join(., ohdg_keep, by = c("sample_number")) %>% 
+  left_join(., tac_keep, by = c("sample_number")) %>% 
+  left_join(., neop_keep, by = c("sample_number")) %>% 
+  left_join(., cort_keep, by = c("sample_number")) %>% 
+  mutate(tac_keep_umol = tac_keep * 2189,
+         os_ratio = ohdg_keep / tac_keep_umol)
+
+
+rm(nutrition)
+rm(biomarkers)
+rm(urine_nutrition)
+rm(cort_keep)
+rm(neop_keep)
+rm(ohdg_keep)
+rm(tac_keep)
+
+
+
+
+```
+
+
+## Report Introduction
+
+Rebecca Brittain and Caitlin O'Connell have increased the size of the oxidative stress and inflammation biomarker samples, and cleaned nutritional data are primarily available. Therefore, I am creating a new first report to detail the exploratory data analysis and eventual hypothesis testing for the caloric and dietary restriction and aging paper.
+
+
+
+I have made the CRediT Taxonomy of Author Contributions into a table, which is presented in it's preliminary form below. I have gone through and identified where I think people belong based on memory (note that I will not forget middle initials when it comes time for publication). Please let me know if the author list should change, and if specific contributions should be added or removed. This is open and subject to change, pending discussion among authors. As of now, the key points for inclusion are that: Rebecca, Caitlin, and Erin have done lab work after I left the lab, and Tim is included in this if cortisol is used; Tim and Rebecca worked on nutritional calculations; Suci and Erin supervised/managed the field site, the lab, etc; and I conceptualized the projects revolving around oxidative stress and aging in orangutans, dietary restriction, etc. Blank spaces have yet to be filled in.
+
+As of now, I think I was the only one to conceive of the caloric restriction project in its form, given I introduced the biomarkers into the lab and explored caloric restriction as having a causal role in lifespan and orangutan health. 
+
+
+&nbsp;  
+```{r authorship table}
+
+kable(authorship) %>% 
+  kable_classic() %>% 
+  row_spec(seq(1, nrow(authorship), 1), extra_css = "border-bottom: 1px solid;") %>% 
+  footnote(general = "For more information: https://casrai.org/credit/")
+
+
+```
+&nbsp;  
+
+
+
+## Exploratory Data Analysis
+
+All 4 biomarkers have been screened for outliers and other exclusionary factors. This first pass INCLUDES non-first-morning voids. It will be repeated with those removed to see if results significantly change. As this is a first pass prior to the remainder of samples being run, I decided to include everything for now. Samples with a CV > 15% were removed. Samples with a specific gravity <= 1.003 were also removed as being too dilute. Finally, for each biomarker, those observations which exceeded +3SD or -3SD were also removed. I am debating on whether this step is appropriate. It may be relevant to include for 8-OHdG, TAC, or neopterin, but I think the outlier procedure should remain in place for cortisol. This biomarker has some extreme values that will almost certainly impact data analysis. See distributions below under Variation.
+
+
+
+&nbsp;  
+
+
+### Variation
+
+
+```{r distribution of each raw biomarker}
+
+
+
+grid.arrange(
+  ggplot(urine_nutrition_master, aes(x = ohdg_keep)) +
+  geom_histogram() +
+  theme_bw() +
+  labs(x = "8-OHdG"),
+  ggplot(urine_nutrition_master, aes(x = tac_keep_umol)) +
+  geom_histogram() +
+  theme_bw() +
+  labs(x = "TAC"),
+  ggplot(urine_nutrition_master, aes(x = neop_keep)) +
+  geom_histogram() +
+  theme_bw() +
+  labs(x = "Neopterin"),
+  ggplot(urine_nutrition_master, aes(x = cort_keep)) +
+  geom_histogram() +
+  theme_bw() +
+  labs(x = "Cortisol"),
+  nrow = 2,
+  top = "Distribution of Biomarker Values"
+)
+
+
+```
+
+Unsurprisingly, all biomarkers are right-skewed. Even with outliers removed following the protocol described above, cortisol's distribution is the most extreme, with a poor spread of extremely high values. Compare this with 8-OHdG and neopterin which also have several high values but a more representative spread of those high values. Also of note, TAC has a much wider and more evenly spread distribution of values relative to 8-OHdG. The purpose of the OS Ratio (which is 8-OHdG / TAC * 1000) is to help capture the relative impact of each biomarker. Oxidative stress is the inability for TAC to stop oxidative damage, meaning that levels of 8-OHdG must be interpreted in light of TAC values. A low 8-OHdG value with a high TAC value indicates that something is increasing oxidative stress but that antioxidant defenses are currently sufficient to handle the issue. If both values are high, then the antioxidant defense are responding but being overwhelmed. 
+
+
+&nbsp;  
+
+```{r distribution of each natural logged biomarker}
+
+grid.arrange(
+  ggplot(urine_nutrition_master, aes(x = log(ohdg_keep))) +
+  geom_histogram() +
+  theme_bw() +
+  labs(x = "ln(8-OHdG)"),
+  ggplot(urine_nutrition_master, aes(x = log(tac_keep_umol))) +
+  geom_histogram() +
+  theme_bw() +
+  labs(x = "ln(TAC)"),
+  ggplot(urine_nutrition_master, aes(x = log(neop_keep))) +
+  geom_histogram() +
+  theme_bw() +
+  labs(x = "ln(Neopterin)"),
+  ggplot(urine_nutrition_master, aes(x = log(cort_keep))) +
+  geom_histogram() +
+  theme_bw() +
+  labs(x = "ln(Cortisol)"),
+  nrow = 2,
+  top = "Distribution of Nat. Log Biomarker Values"
+)
+
+```
+
+&nbsp;  
+
+```{r descriptive statistics of ohdg}
+
+
+
+kable(urine_nutrition_master %>% 
+      # for table keep only biomarker of interest
+      select(ohdg_keep, age_class_simp) %>% 
+      # change this line for each biomarker
+      mutate(biomarker = ohdg_keep) %>% 
+      group_by(age_class_simp) %>% 
+      drop_na(biomarker) %>% 
+      summarise(n_obs = n(),
+                mean = mean(biomarker, na.rm = TRUE),
+                median = median(biomarker, na.rm = TRUE),
+                mode_whole = getmode(round(biomarker, 0)),
+                sd = sd(biomarker, na.rm = TRUE),
+                minimum = min(biomarker, na.rm = TRUE),
+                maximum = max(biomarker, na.rm = TRUE),
+                IQR = IQR(biomarker, na.rm = TRUE),
+                Q1 = quantile(x = biomarker, probs = 0.25, na.rm = TRUE),
+                Q3 = quantile(x = biomarker, probs = 0.75, na.rm = TRUE)),
+      caption = "Descriptive Statistics: 8-OHdG") %>% 
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed"))
+
+
+
+
+
+```
+
+&nbsp; 
+
+```{r descriptive table of tac}
+
+
+kable(urine_nutrition_master %>% 
+      # for table keep only biomarker of interest
+      select(tac_keep_umol, age_class_simp) %>% 
+      # change this line for each biomarker
+      mutate(biomarker = tac_keep_umol) %>% 
+      group_by(age_class_simp) %>% 
+      drop_na(biomarker) %>% 
+      summarise(`# of Observations` = n(),
+                mean = mean(biomarker, na.rm = TRUE),
+                median = median(biomarker, na.rm = TRUE),
+                mode_whole = getmode(round(biomarker, 0)),
+                sd = sd(biomarker, na.rm = TRUE),
+                minimum = min(biomarker, na.rm = TRUE),
+                maximum = max(biomarker, na.rm = TRUE),
+                IQR = IQR(biomarker, na.rm = TRUE),
+                Q1 = quantile(biomarker, probs = 0.25, na.rm = TRUE),
+                Q3 = quantile(biomarker, probs = 0.75, na.rm = TRUE)),
+      caption = "Descriptive Statistiscs: Total Antioxidant Capacity (TAC)") %>% 
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed"))
+
+
+
+```
+
+&nbsp; 
+
+```{r descriptive table for oxidative stress ratio}
+
+
+kable(urine_nutrition_master %>% 
+      # for table keep only biomarker of interest
+      select(os_ratio, age_class_simp) %>% 
+      # change this line for each biomarker
+      mutate(biomarker = os_ratio * 1000) %>% 
+      group_by(age_class_simp) %>% 
+      drop_na(biomarker) %>% 
+      summarise(`# of Observations` = n(),
+                mean = mean(biomarker, na.rm = TRUE),
+                median = median(biomarker, na.rm = TRUE),
+                mode_whole = getmode(round(biomarker, 0)),
+                sd = sd(biomarker, na.rm = TRUE),
+                minimum = min(biomarker, na.rm = TRUE),
+                maximum = max(biomarker, na.rm = TRUE),
+                IQR = IQR(biomarker, na.rm = TRUE),
+                Q1 = quantile(biomarker, probs = 0.25, na.rm = TRUE),
+                Q3 = quantile(biomarker, probs = 0.75, na.rm = TRUE)),
+      caption = "Descriptive Statistiscs: Oxidative Stress Ratio (x1000)") %>% 
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed"))
+
+
+
+
+
+```
+
+The mode for this table is not very interpretable. To calculate mode, I rounded to whole numbers for consistency. It is entirely unsurprising that 1 is the mode for both adult males and females, as it is the center of a very tiny range.
+
+What is interesting is that it appears that males avoid more serious oxidative stress, because of a greater ability to produce antioxidants.
+
+&nbsp; 
+
+```{r descriptive table for neopterin}
+
+
+kable(urine_nutrition_master %>% 
+      # for table keep only biomarker of interest
+      select(neop_keep, age_class_simp) %>% 
+      # change this line for each biomarker
+      mutate(biomarker = neop_keep) %>% 
+      group_by(age_class_simp) %>% 
+      drop_na(biomarker) %>% 
+      summarise(`# of Observations` = n(),
+                mean = mean(biomarker, na.rm = TRUE),
+                median = median(biomarker, na.rm = TRUE),
+                mode_whole = getmode(round(biomarker, 0)),
+                sd = sd(biomarker, na.rm = TRUE),
+                minimum = min(biomarker, na.rm = TRUE),
+                maximum = max(biomarker, na.rm = TRUE),
+                IQR = IQR(biomarker, na.rm = TRUE),
+                Q1 = quantile(biomarker, probs = 0.25, na.rm = TRUE),
+                Q3 = quantile(biomarker, probs = 0.75, na.rm = TRUE)),
+      caption = "Descriptive Statistics: Neopterin") %>% 
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed"))
+
+
+
+
+```
+
+&nbsp; 
+
+```{r descriptive table for cortisol}
+
+
+kable(urine_nutrition_master %>% 
+      # for table keep only biomarker of interest
+      select(cort_keep, age_class_simp) %>% 
+      # change this line for each biomarker
+      mutate(biomarker = cort_keep) %>% 
+      group_by(age_class_simp) %>% 
+      drop_na(biomarker) %>% 
+      summarise(`# of Observations` = n(),
+                mean = mean(biomarker, na.rm = TRUE),
+                median = median(biomarker, na.rm = TRUE),
+                mode_whole = getmode(round(biomarker, 0)),
+                sd = sd(biomarker, na.rm = TRUE),
+                minimum = min(biomarker, na.rm = TRUE),
+                maximum = max(biomarker, na.rm = TRUE),
+                IQR = IQR(biomarker, na.rm = TRUE),
+                Q1 = quantile(biomarker, probs = 0.25, na.rm = TRUE),
+                Q3 = quantile(biomarker, probs = 0.75, na.rm = TRUE)),
+      caption = "Descriptive Statistics: Cortisol") %>% 
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed"))
+
+```
+
+&nbsp;  
+
+### Check Distribution for GAMM Model Fitting
+
+```{r check ohdg distribution for gamm}
+
+# Check 8-OHdG Distribution for GAMM Modelling ###
+
+hist(na.omit(log(urine_nutrition_master$ohdg_keep)), breaks = 100,
+     main = "Distribution of 8-OHdG")
+
+
+urine_value <- as.numeric(na.omit(urine_nutrition_master$ohdg_keep))
+
+ohdg_norm = fitdist(urine_value, distr = "norm", method = "mle")
+summary(ohdg_norm)
+plot(ohdg_norm)
+
+
+ohdg_lnorm = fitdist(urine_value, distr = "lnorm", method = "mle") # lnorm for 8-OHdG, but some outliers
+summary(ohdg_lnorm)
+plot(ohdg_lnorm)
+
+ohdg_gamma = fitdist(urine_value, distr = "gamma", method = "mme")
+summary(ohdg_gamma)
+plot(ohdg_gamma)
+
+
+ohdg_exp = fitdist(urine_value, distr = "exp", method = "mme")
+summary(ohdg_exp)
+plot(ohdg_exp)
+
+
+```
+
+log-normal seems to be the best but there are some outliers that need to be looked into
+
+&nbsp;
+
+```{r check tac distribution for gamm}
+
+# Check TAC Distribution for GAMM Modelling ###
+
+hist(na.omit(log(urine_nutrition_master$tac_keep)), breaks = 100,
+     main = "Distribution of TAC")
+
+
+urine_value <- as.numeric(na.omit(urine_nutrition_master$tac_keep))
+
+tac_norm = fitdist(urine_value, distr = "norm", method = "mle") # looks like...normal distribution?
+summary(tac_norm)
+plot(tac_norm)
+
+
+tac_lnorm = fitdist(urine_value, distr = "lnorm", method = "mle") 
+summary(tac_lnorm)
+plot(tac_lnorm)
+
+tac_gamma = fitdist(urine_value, distr = "gamma", method = "mme")
+summary(tac_gamma)
+plot(tac_gamma)
+
+
+tac_exp = fitdist(urine_value, distr = "exp", method = "mme")
+summary(tac_exp)
+plot(tac_exp)
+
+
+```
+
+
+
+&nbsp;
+
+```{r check neop distribution for gamm}
+
+# Check Neopterin Distribution for GAMM Modelling ###
+
+hist(na.omit(log(urine_nutrition_master$neop_keep)), breaks = 100,
+     main = "Distribution of Neopterin")
+
+
+urine_value <- as.numeric(na.omit(urine_nutrition_master$neop_keep))
+
+neop_norm = fitdist(urine_value, distr = "norm", method = "mle") 
+summary(neop_norm)
+plot(neop_norm)
+
+
+neop_lnorm = fitdist(urine_value, distr = "lnorm", method = "mle") # lnorm is best fit for neopterin
+summary(neop_lnorm)
+plot(neop_lnorm)
+
+neop_gamma = fitdist(urine_value, distr = "gamma", method = "mme")
+summary(neop_gamma)
+plot(neop_gamma)
+
+
+neop_exp = fitdist(urine_value, distr = "exp", method = "mme")
+summary(neop_exp)
+plot(neop_exp)
+
+
+```
+
+
+
+
+
+&nbsp;
+
+```{r check cort distribution for gamm}
+
+# Check Cortisol Distribution for GAMM Modelling ###
+
+hist(na.omit(log(urine_nutrition_master$cort_keep)), breaks = 100,
+     main = "Distribution of Cortisol")
+
+
+urine_value <- as.numeric(na.omit(urine_nutrition_master$cort_keep))
+
+cort_norm = fitdist(urine_value, distr = "norm", method = "mle") 
+summary(cort_norm)
+plot(cort_norm)
+
+
+cort_lnorm = fitdist(urine_value, distr = "lnorm", method = "mle") 
+summary(cort_lnorm)
+plot(cort_lnorm)
+
+cort_gamma = fitdist(urine_value, distr = "gamma", method = "mme")
+summary(cort_gamma)
+plot(cort_gamma)
+
+
+cort_exp = fitdist(urine_value, distr = "exp", method = "mme")
+summary(cort_exp)
+plot(cort_exp)
+
+
+```
+ 
+There are at least two major outliers that need to be dealt with. 
+
+
+
+
+
+### Covariation
+
+&nbsp;
+
+I should note that it might be valuable to look at creatinine corrections because all available literature corrects urinary 8-OHdG with creatinine. The only difference was Nicole Thompson-Gonzalez's study out of Melissa Emery Thompson's lab. However, she did not provide any descriptive statistics, only model outputs. Therefore I do not know what sort of range her data had (which is rather frustrating). They included some plots, but ....*sigh*. It looks like, for 8-OHdG, the median for before, during, and after their so called epidemic is 8, 10, and 12 ng/mL, with almost all points falling below 20 ng/mL. They put in a few other graphs. However, they did not adjust oxidative damage for antioxidant capacity at all, despite also measuring TAC. I have included Supplementary Tables 5 and 6 from this publication below.
+
+Now curiously, she found no correlation between 8-OHdG and TAC. If you see the correlation plot below the two tables, there is a reasonably strong spearman correlation between 8-OHdG and TAC in our data. From just a spearman, there is no correlation between 8-OHdG and neopterin. These are, of course, raw biomarkers
+
+&nbsp;  
+
+
+```{r thompson supplement table 5, cap = "Assessed with generalized linear mixed effects models with individual ID as a random effect. Significant relationships in bold."}
+
+kable(thompson_table5,
+      caption = "Table S5: Correlations between OS biomarkers") %>% 
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed")) %>% 
+  row_spec(which(thompson_table5$`p-value` < 0.05), bold = T) %>% 
+  pack_rows(index = table(thompson_table5$`Biomarker 1`))
+
+
+
+```
+
+
+
+&nbsp;  
+
+
+```{r thompson supplement table 6, cap = "Betas and standard deviations of predictors from generalized linear mixed effects model and percentage of overall variance explained by individual ID as a random effect. Age by sex interactions in grey shading, extracted from separate model that included main effects of age and sex. Significant effects in bold."}
+
+kable(thompson_table6,
+      caption = "Table S6: Cross-sectional variation in OS biomarker by individual age and sex") %>% 
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed")) %>% 
+  row_spec(which(thompson_table6$p == "< 0.001"), bold = T) %>% 
+  pack_rows(index = table(thompson_table6$Biomarker))
+
+```
+
+
+
+
+&nbsp;  
+
+```{r correlation plot of raw biomarkers and key previous day intakes, echo=FALSE}
+
+
+M <- cor(urine_nutrition_master[, c("ohdg_keep", "tac_keep_umol", "os_ratio", "neop_keep", "cort_keep", "prev_day_total_kcal_using_ap_low_fermentation", "prev_day_ap_kcal", "prev_day_lipid_kcal", "prev_day_tnc_kcal")], use = "pairwise.complete.obs", method = "spearman")
+
+
+colnames(M) <- c("8-OHdG", "TAC", "OS Ratio", "Neopterin", "Cortisol", "prev total kcal", "prev protein", "prev lipid", "prev tnc")
+rownames(M) <- c("8-OHdG", "TAC", "OS Ratio", "Neopterin", "Cortisol", "prev total kcal", "prev protein", "prev lipid", "prev tnc")
+
+
+corrplot(M,  method = "number", type = "lower", diag = FALSE)
+
+
+
+```
+
+
+&nbsp;  
+
+```{r correlation plot of logged biomarkers and key previous day intakes, eval=FALSE, include=FALSE}
+
+
+M_log <- cor(log(urine_nutrition_master[, c("ohdg_keep", "tac_keep_umol", "os_ratio", "neop_keep", "cort_keep", "prev_day_total_kcal_using_ap_low_fermentation", "prev_day_ap_kcal", "prev_day_lipid_kcal", "prev_day_tnc_kcal")]), use = "pairwise.complete.obs", method = "spearman")
+
+
+colnames(M_log) <- c("8-OHdG", "TAC", "OS Ratio", "Neopterin", "Cortisol", "prev total kcal", "prev protein", "prev lipid", "prev tnc")
+rownames(M_log) <- c("8-OHdG", "TAC", "OS Ratio", "Neopterin", "Cortisol", "prev total kcal", "prev protein", "prev lipid", "prev tnc")
+
+
+corrplot(M_log,  method = "number", type = "lower", diag = FALSE)
+
+
+
+```
+
+These correlations here are from Tuanan data, while the two tables above are from Nicole's paper on chimps. 
+
+&nbsp; 
+
+```{r scatter plot of ohdg}
+
+
+ggplot(urine_nutrition_master, aes(x = tac_keep_umol, y = ohdg_keep)) +
+  geom_point() +
+  facet_grid( ~ age_class_simp)+
+  theme_bw() +
+  labs(x = "TAC", y = "8-OHdG")
+
+
+```
+
+
+The direction of relationships seems to be the same, roughly speaking, across all 3 age-sex classes.
+
+
+```{r scatter of os ratio}
+
+
+urine_nutrition_master %>% 
+  mutate(os_ratio_quartile = ifelse(os_ratio * 1000 > quantile(urine_nutrition_master$os_ratio * 1000, na.rm = TRUE)[4], ">75%",
+                                    ifelse(os_ratio * 1000 > 1.38 & os_ratio * 1000 < 1.94, "50-75%",
+                                           ifelse(os_ratio * 1000 > quantile(urine_nutrition_master$os_ratio * 1000, na.rm = TRUE)[2] & os_ratio * 1000 < quantile(urine_nutrition_master$os_ratio * 1000, na.rm = TRUE)[3], "25-50%",
+                                                  ifelse(os_ratio * 1000 < quantile(urine_nutrition_master$os_ratio * 1000, na.rm = TRUE)[2], "<25%", NA))))) %>% 
+  ggplot(., aes(x = tac_keep_umol, y = ohdg_keep, color = os_ratio_quartile)) +
+  geom_point() +
+  facet_grid( ~ age_class_simp)+
+  theme_bw() +
+  labs(x = "TAC", y = "8-OHdG")
+
+
+
+```
+
+
+
+&nbsp; 
+
+
+
+
+
+
+
+### Caloric Restriction and Oxidative Stress
+
+&nbsp; 
+
+I need to make sure the list of orangutan IDs is correct, as well as double check that age-sex classes are input properly.
+
+```{r gamm tac and os}
+
+mod_os_cr <- gamm(ohdg_keep ~ s(tac_keep_umol), 
+                  data = urine_nutrition_master, random = list(ID_correction=~1),
+                  family = gaussian(link = "log"))
+
+mod_os_cr <- gamm(log(ohdg_keep) ~ s(tac_keep_umol), 
+                  data = urine_nutrition_master, random = list(ID_correction=~1))
+summary(mod_os_cr$gam)
+plot(mod_os_cr$gam)
+
+```
+
+So the two biomarkers increase with each other. The way I am thinking of this is antioxidant defenses are increasing in response to free radicals, but not necessarily dealing with all them, thus resulting in damage. At the upper end of TAC, two things could be happening...1) there is just insufficient samples. The rug plot seems to show a spread of data so I'm not sure this is necessarily the case. The second option is that so many antioxidants are being produced that free radicals are being dealt with. Another option is that there is a large influx of dietary antioxidants that have nothing to do with free radicals, or that antioxidants are increasing for some other reason.
+
+Make sure to assess the fit. See AABA analysis
+
+
+```{r gamm cr and ohdg}
+
+
+mod_ohdg_cr <- gamm(ohdg_keep ~ s(prev_day_total_kcal_using_ap_low_fermentation),
+                    data = urine_nutrition_master %>% filter(prev_day_total_kcal_using_ap_low_fermentation < 5500), random = list(ID_correction=~1))
+
+summary(mod_ohdg_cr$gam)
+plot(mod_ohdg_cr$gam)
+
+
+```
+
+GLMM looks like it will be better
+
+
+```{r gamm cr and tac}
+
+
+mod_tac_cr <- gamm(tac_keep_umol ~ s(prev_day_total_kcal_using_ap_low_fermentation),
+                    data = urine_nutrition_master %>% filter(prev_day_total_kcal_using_ap_low_fermentation < 10000), random = list(ID_correction=~1))
+
+summary(mod_tac_cr$gam)
+plot(mod_tac_cr$gam)
+
+
+```
+
+
+
+
+```{r gamm cr and tac and ohdg}
+
+
+mod_ohdg_tac_cr <- gamm(ohdg_keep ~ s(prev_day_total_kcal_using_ap_low_fermentation) + s(tac_keep_umol),
+                    data = urine_nutrition_master, random = list(ID_correction=~1))
+
+summary(mod_ohdg_tac_cr$gam)
+plot(mod_ohdg_tac_cr$gam)
+
+
+```
+
+
+
+```{r gamm cr and neop}
+
+mod_neop_cr <- gamm(neop_keep ~ s(prev_day_total_kcal_using_ap_low_fermentation),
+                    data = urine_nutrition_master %>% filter(prev_day_total_kcal_using_ap_low_fermentation < 5500), random = list(ID_correction=~1))
+
+summary(mod_neop_cr$gam)
+plot(mod_neop_cr$gam)
+
+```
+
+
+
+```{r gamm neop and tac}
+
+mod_neop_tac <- gamm(tac_keep ~ s(neop_keep),
+                     data = urine_nutrition_master, random = list(ID_correction=~1))
+
+summary(mod_neop_tac$gam)
+plot(mod_neop_tac$gam)
+
+```
+
+
+
+
+```{r gamm neop and ohdg}
+
+mod_neop_ohdg <- gamm(ohdg_keep ~ s(neop_keep),
+                     data = urine_nutrition_master, random = list(ID_correction=~1))
+
+summary(mod_neop_ohdg$gam)
+plot(mod_neop_ohdg$gam)
+
+```
+
+
+
+```{r gamm ohdg and fai and tac}
+
+mod_ohdg_fai <- gamm(ohdg_keep ~ s(fai) + s(tac_keep_umol),
+                     data = urine_nutrition_master, random = list(ID_correction=~1))
+
+summary(mod_ohdg_fai$gam)
+plot(mod_ohdg_fai$gam)
+
+
+
+```
+
+
+
+### Life History, Aging, and Oxidative Stress
+
+
+```{r os ratio and age}
+
+
+
+
+```
+
+
+
+```{r os ratio and age in years}
+
+
+gamm_ohdg_offspring <- gamm(ohdg_keep ~ s(known_birth_yr, k = 7),
+                     data = urine_nutrition_master, random = list(ID_correction=~1)) 
+
+
+```
+
+
+
+
+## Questions for Publication
+
+
+
+How many of the initial samples were run for each biomarker, and how many were removed for each exclusion criteria
+
+
+```{r how many samples are there}
+
+
+
+# samples included in downstream analyses
+sum(!is.na(urine_nutrition_master$ohdg))
+sum(!is.na(urine_nutrition_master$ohdg_keep))
+
+
+sum(!is.na(urine_nutrition_master$tac))
+sum(!is.na(urine_nutrition_master$tac_keep))
+
+
+sum(!is.na(urine_nutrition_master$neopterin))
+sum(!is.na(urine_nutrition_master$neop_keep))
+
+
+sum(!is.na(urine_nutrition_master$cortisol))
+sum(!is.na(urine_nutrition_master$cort_keep))
+  
+
+```
